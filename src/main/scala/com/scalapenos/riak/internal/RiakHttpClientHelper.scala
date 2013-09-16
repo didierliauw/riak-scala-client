@@ -18,6 +18,7 @@ package com.scalapenos.riak
 package internal
 
 import akka.actor._
+import spray.httpx.unmarshalling.DeserializationError
 
 
 private[riak] object RiakHttpClientHelper {
@@ -226,28 +227,31 @@ private[riak] class RiakHttpClientHelper(system: ActorSystem) extends RiakUriSup
     }.getOrElse(successful(Nil))
   }
 
+  private def extractSiblings(response: HttpResponse): Either[DeserializationError,Set[RiakValue]] = {
+    import spray.http._
+    import spray.httpx.unmarshalling._
+
+    val vclockHeader = response.headers.find(_.is(`X-Riak-Vclock`.toLowerCase)).toList
+
+    response.entity.as[MultipartContent].right map { multipartContent =>
+      // TODO: make ignoring deleted values optional
+
+      multipartContent.parts.filterNot(part => part.headers.exists(_.lowercaseName == `X-Riak-Deleted`.toLowerCase))
+        .flatMap(part => toRiakValue(part.entity, vclockHeader ++ part.headers))
+        .toSet
+    }
+  }
 
   // ==========================================================================
   // Conflict Resolution
   // ==========================================================================
 
   private def resolveConflict(server: RiakServerInfo, bucket: String, key: String, response: HttpResponse, resolver: RiakConflictsResolver): Future[RiakValue] = {
-    import spray.http._
-    import spray.httpx.unmarshalling._
-
-    val vclockHeader = response.headers.find(_.is(`X-Riak-Vclock`.toLowerCase)).toList
-
-    response.entity.as[MultipartContent] match {
+    extractSiblings(response) match {
       case Left(error) => throw new ConflictResolutionFailed(error.toString)
-      case Right(multipartContent) => {
-        // TODO: make ignoring deleted values optional
-
-        val values = multipartContent.parts.filterNot(part => part.headers.exists(_.lowercaseName == `X-Riak-Deleted`.toLowerCase))
-                                           .flatMap(part => toRiakValue(part.entity, vclockHeader ++ part.headers))
-                                           .toSet
-
+      case Right(siblings) => {
         // Store the resolved value back to Riak and return the resulting RiakValue
-        val ConflictResolution(result, writeBack) = resolver.resolve(values)
+        val ConflictResolution(result, writeBack) = resolver.resolve(siblings)
         if (writeBack) {
           storeAndFetch(server, bucket, key, result, resolver)
         } else {

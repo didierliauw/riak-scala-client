@@ -102,6 +102,18 @@ private[riak] class RiakHttpClientHelper(system: ActorSystem) extends RiakUriSup
     }
   }
 
+  def fetchWithMulti(server: RiakServerInfo, bucket: String, key: String): Future[Option[Either[Set[RiakValue],RiakValue]]] = {
+    httpRequest(Get(KeyUri(server, bucket, key))).flatMap { response =>
+      response.status match {
+        case OK              => successful(toRiakValue(response).map(Right.apply))
+        case NotFound        => successful(None)
+        case MultipleChoices => successful(extractSiblings(response).fold(_ => None,siblings => Some(Left(siblings))))
+        case other           => throw new BucketOperationFailed(s"Fetch for key '$key' in bucket '$bucket' produced an unexpected response code '$other'.")
+        // TODO: case NotModified => successful(None)
+      }
+    }
+  }
+
   def store(server: RiakServerInfo, bucket: String, key: String, value: RiakValue, resolver: RiakConflictsResolver): Future[Unit] = {
     val request = createStoreHttpRequest(value)
 

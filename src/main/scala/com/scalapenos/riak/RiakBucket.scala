@@ -39,6 +39,8 @@ trait RiakBucket {
   def fetch(index: String, start: Int, end: Int): Future[List[RiakValue]] = fetch(RiakIndexRange(index, start, end))
   private[riak] def fetch(index: RiakIndexRange): Future[List[RiakValue]]
 
+  def fetchWithMulti(key: String): Future[Option[Either[Set[RiakValue],RiakValue]]]
+
 
   def store[T: RiakMarshaller](key: String, value: T): Future[Unit] = store(key, RiakValue(value))
   def store[T: RiakMarshaller](key: String, meta: RiakMeta[T]): Future[Unit] = store(key, RiakValue(meta))
